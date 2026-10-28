@@ -6,7 +6,7 @@ import { createStore } from './store'
  * The API has no "list jobs" endpoint, so the UI remembers the event ids it
  * started (in this browser) and polls `GET /jobs/{event_id}` for each.
  */
-export type JobKind = 'backfill' | 'article' | 'sync'
+export type JobKind = 'backfill' | 'article' | 'sync' | 'eval'
 
 export interface TrackedJob {
   event_id: string

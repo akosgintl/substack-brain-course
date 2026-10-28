@@ -10,6 +10,14 @@ function describe(e: InngestEvent): string {
   const pick = (k: string) => (typeof d[k] === 'string' || typeof d[k] === 'number' ? String(d[k]) : null)
   const bits = [pick('canonical_id') ?? pick('url') ?? pick('feed_url') ?? pick('snapshot_id') ?? pick('function_id')]
   if (pick('passage_count')) bits.push(`${pick('passage_count')} passages`)
+  // kb/claims.extracted (week 4): the extractor's yield after the quote-span guardrail.
+  if (pick('claim_count')) bits.push(`${pick('claim_count')} claims`)
+  if (pick('dropped_spans') && pick('dropped_spans') !== '0') bits.push(`${pick('dropped_spans')} quotes dropped`)
+  // kb/answer.evaluated (week 5): the evaluate-answer verdict for a snapshot.
+  if (pick('composite_score')) bits.push(`score ${pick('composite_score')}`)
+  if (Array.isArray(d.failure_codes) && d.failure_codes.length) bits.push(d.failure_codes.join(' '))
+  // kb/eval.run
+  if (pick('suite_name')) bits.push(`suite ${pick('suite_name')}`)
   return bits.filter(Boolean).join(' · ') || JSON.stringify(d).slice(0, 90)
 }
 

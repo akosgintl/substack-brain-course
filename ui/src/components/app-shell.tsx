@@ -3,6 +3,7 @@ import {
   Brain,
   Download,
   FlaskConical,
+  Gauge,
   LayoutDashboard,
   MessageSquareText,
   Monitor,
@@ -28,6 +29,7 @@ const NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
   { to: '/ask', label: 'Ask', icon: MessageSquareText },
   { to: '/lab', label: 'Search Lab', icon: FlaskConical },
+  { to: '/evals', label: 'Evals', icon: Gauge },
   { to: '/ingest', label: 'Ingest & jobs', icon: Download },
 ]
 
@@ -54,6 +56,7 @@ function HealthCard() {
     { label: 'API', kind: q.isError ? 'error' : h ? 'ok' : 'idle' },
     { label: 'Postgres', kind: subsystemKind(h?.database) },
     { label: 'Inngest', kind: subsystemKind(h?.inngest) },
+    { label: 'Memgraph', kind: subsystemKind(h?.memgraph) },
   ] as const
   return (
     <div className="rounded-xl border border-line bg-surface-2/50 p-3">
@@ -71,6 +74,7 @@ function HealthCard() {
       {h ? (
         <p className="tabular mt-2.5 border-t border-line pt-2 font-mono text-[11px] text-muted">
           {formatNumber(h.articles)} articles · {formatNumber(h.passages)} passages
+          {h.claims != null ? ` · ${formatNumber(h.claims)} claims` : ''}
         </p>
       ) : null}
     </div>
@@ -145,6 +149,7 @@ export function AppShell({ theme, children }: { theme: ThemePref; children: Reac
             { href: links.inngest, label: 'Inngest dev server' },
             { href: links.swagger, label: 'Swagger UI' },
             { href: links.adminer, label: 'Adminer' },
+            { href: links.memgraphLab, label: 'Memgraph Lab' },
           ].map((l) => (
             <a
               key={l.href}

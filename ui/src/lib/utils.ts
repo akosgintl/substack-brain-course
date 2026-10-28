@@ -36,3 +36,8 @@ export const formatNumber = (n: number) => n.toLocaleString('en')
 export function formatMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s` : `${Math.round(ms)}ms`
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** claim_id / passage_id shape, as `GET /sources/{id}` expects. */
+export const isUuid = (s: string) => UUID_RE.test(s.trim())

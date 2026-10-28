@@ -5,6 +5,7 @@ import { Toaster } from 'sonner'
 import { ApiConsole } from './components/api-console'
 import { AppShell } from './components/app-shell'
 import { CommandPalette } from './components/command-palette'
+import { SourceInspector } from './components/source-inspector'
 import { TooltipProvider } from './components/ui/overlays'
 import { useTheme } from './lib/theme'
 
@@ -12,6 +13,7 @@ import { useTheme } from './lib/theme'
 const OverviewPage = lazy(() => import('./pages/overview').then((m) => ({ default: m.OverviewPage })))
 const AskPage = lazy(() => import('./pages/ask').then((m) => ({ default: m.AskPage })))
 const SearchLabPage = lazy(() => import('./pages/search-lab').then((m) => ({ default: m.SearchLabPage })))
+const EvalsPage = lazy(() => import('./pages/evals').then((m) => ({ default: m.EvalsPage })))
 const IngestPage = lazy(() => import('./pages/ingest').then((m) => ({ default: m.IngestPage })))
 
 const queryClient = new QueryClient({
@@ -26,6 +28,7 @@ function Routed() {
       <Route path="/" element={<OverviewPage />} />
       <Route path="/ask" element={<AskPage />} />
       <Route path="/lab" element={<SearchLabPage />} />
+      <Route path="/evals" element={<EvalsPage />} />
       <Route path="/ingest" element={<IngestPage />} />
       <Route path="*" element={<OverviewPage />} />
     </Routes>
@@ -44,6 +47,7 @@ export function App() {
           </AppShell>
           <CommandPalette />
           <ApiConsole />
+          <SourceInspector />
           <Toaster
             theme={resolved}
             position="bottom-right"

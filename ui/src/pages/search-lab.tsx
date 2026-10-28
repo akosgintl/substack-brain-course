@@ -3,22 +3,33 @@ import { ArrowUpRight, FlaskConical, Pin, Search } from 'lucide-react'
 import { motion } from 'motion/react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { ClaimNote } from '@/components/claim'
 import { ENGINE, EngineBadge, EngineDot } from '@/components/engine'
 import { PageHeader } from '@/components/page-header'
+import { InspectButton } from '@/components/passage'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { EmptyState, Skeleton } from '@/components/ui/misc'
-import { type Engine, type Hit, type Mode, api, inferRrfK, toHits } from '@/lib/api'
+import { type Engine, type Hit, type Mode, api, inferRrfK, rrfTerms, toHits } from '@/lib/api'
 import { cn, formatDate, formatMs } from '@/lib/utils'
 
 const COLUMNS: { mode: Mode; engine: Engine; title: string; scoreLabel: string; blurb: string }[] = [
   { mode: 'sparse', engine: 'bm25', title: 'Full-text · BM25', scoreLabel: 'ts_rank', blurb: 'Postgres tsvector. Nails exact tokens, misses synonyms.' },
   { mode: 'dense', engine: 'vector', title: 'Vector · pgvector', scoreLabel: 'cosine similarity', blurb: 'Embeddings. Understands meaning, blurs exact tokens.' },
-  { mode: 'hybrid', engine: 'both', title: 'Hybrid · RRF', scoreLabel: 'RRF score', blurb: 'Both lists fused by rank position, not by score.' },
+  { mode: 'hybrid', engine: 'all', title: 'Hybrid · 3-way RRF', scoreLabel: 'RRF score', blurb: 'BM25, vectors and the claim graph, fused by rank position, not by score.' },
 ]
 
-const SAMPLES = ['reciprocal rank fusion', 'idempotency key', 'agent memory', 'LoRA fine-tuning', 'websearch_to_tsquery', 'durable execution retries']
+/** The third engine has no `mode` of its own on GET /search: it only shows up inside hybrid. */
+const GRAPH_TILE = {
+  engine: 'graph' as Engine,
+  title: 'Claim graph · Memgraph',
+  blurb: 'Topics in the query → active claims on those topics → the passages quoting them. No similarity score, only a rank.',
+}
+
+const ENGINE_ORDER: Engine[] = ['all', 'both', 'bm25+graph', 'vector+graph', 'bm25', 'vector', 'graph']
+
+const SAMPLES = ['reciprocal rank fusion', 'idempotency key', 'agent memory', 'agentic RAG', 'small language models', 'LoRA fine-tuning', 'websearch_to_tsquery', 'durable execution retries']
 
 interface ColumnData {
   hits: Hit[]
@@ -81,6 +92,7 @@ function LabCard({
         {pinned ? <Pin className="size-3.5 shrink-0 text-accent" /> : null}
       </div>
 
+      {hit.claim_text ? <ClaimNote text={hit.claim_text} type={hit.claim_type} clamp={!expanded} className="ml-8 mt-2" /> : null}
       <p className={cn('mt-2 pl-8 text-[12px] leading-relaxed text-fg-2', !expanded && 'line-clamp-3')}>{hit.text}</p>
 
       <div className="mt-3 pl-8">
@@ -99,10 +111,16 @@ function LabCard({
         {mode === 'hybrid' ? (
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <EngineBadge engine={hit.engine} />
-            <span className="font-mono text-[10.5px] text-muted">
-              {[hit.sparse_rank != null ? `1/(${k}+${hit.sparse_rank})` : null, hit.dense_rank != null ? `1/(${k}+${hit.dense_rank})` : null]
-                .filter(Boolean)
-                .join(' + ')}
+            <span className="flex flex-wrap items-center gap-x-1 font-mono text-[10.5px] text-muted">
+              {rrfTerms(hit, k)
+                .filter((t) => t.rank != null)
+                .map((t, i) => (
+                  <span key={t.engine} className="inline-flex items-center gap-1">
+                    {i > 0 ? '+ ' : null}
+                    <EngineDot engine={t.engine} className="size-1.5" />
+                    1/({k}+{t.rank})
+                  </span>
+                ))}
             </span>
           </div>
         ) : null}
@@ -123,16 +141,25 @@ function LabCard({
               </span>
             )
           })}
-          <a
-            href={hit.url}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="ml-auto inline-flex items-center gap-0.5 text-muted hover:text-accent"
-            aria-label="Open article"
-          >
-            <ArrowUpRight className="size-3.5" />
-          </a>
+          {mode === 'hybrid' && hit.graph_rank != null ? (
+            <span className="inline-flex items-center gap-1 rounded-md border border-line-strong px-1.5 py-0.5 font-mono text-fg-2">
+              <EngineDot engine="graph" className="size-1.5" />
+              Graph #{hit.graph_rank}
+            </span>
+          ) : null}
+          <span className="ml-auto inline-flex items-center gap-2.5">
+            <InspectButton id={hit.claim_id || hit.passage_id} label={hit.claim_id ? 'Claim' : 'Source'} />
+            <a
+              href={hit.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-0.5 text-muted hover:text-accent"
+              aria-label="Open article"
+            >
+              <ArrowUpRight className="size-3.5" />
+            </a>
+          </span>
         </div>
       </div>
     </motion.li>
@@ -256,8 +283,9 @@ export function SearchLabPage() {
   const k = (hybrid && inferRrfK(hybrid.hits)) ?? 60
   const overlap = sparse && dense ? sparse.hits.filter((h) => dense.hits.some((d) => d.passage_id === h.passage_id)).length : null
   const mix = hybrid
-    ? (['both', 'bm25', 'vector'] as Engine[]).map((e) => ({ e, n: hybrid.hits.filter((h) => h.engine === e).length }))
+    ? ENGINE_ORDER.map((e) => ({ e, n: hybrid.hits.filter((h) => h.engine === e).length })).filter((m) => m.n > 0)
     : null
+  const viaGraph = hybrid ? hybrid.hits.filter((h) => h.graph_rank != null).length : null
   const top = hybrid?.hits[0]
 
   const run = (text = draft, n = limit) => {
@@ -305,12 +333,12 @@ export function SearchLabPage() {
             <CardHeader>
               <CardTitle>Why three columns?</CardTitle>
               <CardDescription>
-                Neither engine is enough alone. Reciprocal Rank Fusion scores each passage by <span className="font-mono">Σ 1/(k + rank)</span> across engines, so agreement between two very different engines beats being one engine's favourite.
+                No engine is enough alone. Reciprocal Rank Fusion scores each passage by <span className="font-mono">Σ 1/(k + rank)</span> across engines, so agreement between very different engines beats being one engine's favourite. Since week 4 the hybrid column fuses a third ranking, the Memgraph claim graph. It has no standalone mode on GET /search, so you see it inside hybrid as Graph ranks and matched claims.
               </CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-3">
-              {COLUMNS.map((c) => (
-                <div key={c.mode} className="rounded-xl border border-line bg-surface-2/40 p-3.5">
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              {[...COLUMNS, GRAPH_TILE].map((c) => (
+                <div key={c.title} className="rounded-xl border border-line bg-surface-2/40 p-3.5">
                   <EngineBadge engine={c.engine} />
                   <p className="mt-2 text-[13px] font-medium">{c.title}</p>
                   <p className="mt-1 text-[12px] text-fg-2">{c.blurb}</p>
@@ -321,7 +349,7 @@ export function SearchLabPage() {
           <Card>
             <CardHeader>
               <CardTitle>Try a query</CardTitle>
-              <CardDescription>Exact tokens favour BM25; paraphrases favour vectors.</CardDescription>
+              <CardDescription>Exact tokens favour BM25, paraphrases favour vectors, and named topics (RAG, MCP, SLMs…) pull in the claim graph.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
               {SAMPLES.map((s) => (
@@ -343,7 +371,7 @@ export function SearchLabPage() {
             <Metric label="BM25 ∩ Vector" value={overlap != null ? `${overlap} / ${limit}` : '—'}>
               passages both engines put in their top {limit}
             </Metric>
-            <Metric label="Hybrid mix" value={mix ? `${mix[0].n} both` : '—'}>
+            <Metric label="Hybrid mix" value={viaGraph != null && hybrid ? `${viaGraph} / ${hybrid.hits.length} via graph` : '—'}>
               {mix ? (
                 <span className="flex flex-wrap gap-x-3">
                   {mix.map(({ e, n }) => (
@@ -403,26 +431,26 @@ export function SearchLabPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap items-center gap-3 font-mono text-[13px]">
-                  {top.sparse_rank != null ? (
-                    <span className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2">
-                      <EngineDot engine="bm25" /> BM25 rank {top.sparse_rank} → 1/({k}+{top.sparse_rank}) = {(1 / (k + top.sparse_rank)).toFixed(5)}
+                  {rrfTerms(top, k).map((t, i) => (
+                    <span key={t.engine} className="contents">
+                      {i > 0 ? <span className="text-muted">+</span> : null}
+                      {t.rank != null && t.value != null ? (
+                        <span className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2">
+                          <EngineDot engine={t.engine} /> {ENGINE[t.engine].label} rank {t.rank} → 1/({k}+{t.rank}) = {t.value.toFixed(5)}
+                        </span>
+                      ) : (
+                        <span className="rounded-lg border border-dashed border-line px-3 py-2 text-muted">
+                          not in {ENGINE[t.engine].label.toLowerCase()} candidates → 0
+                        </span>
+                      )}
                     </span>
-                  ) : (
-                    <span className="rounded-lg border border-dashed border-line px-3 py-2 text-muted">not in BM25 candidates → 0</span>
-                  )}
-                  <span className="text-muted">+</span>
-                  {top.dense_rank != null ? (
-                    <span className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2">
-                      <EngineDot engine="vector" /> Vector rank {top.dense_rank} → 1/({k}+{top.dense_rank}) = {(1 / (k + top.dense_rank)).toFixed(5)}
-                    </span>
-                  ) : (
-                    <span className="rounded-lg border border-dashed border-line px-3 py-2 text-muted">not in vector candidates → 0</span>
-                  )}
+                  ))}
                   <span className="text-muted">=</span>
                   <span className="rounded-lg bg-accent-soft px-3 py-2 font-semibold">{top.rrf_score.toFixed(5)}</span>
                 </div>
+                {top.claim_text ? <ClaimNote text={top.claim_text} type={top.claim_type} clamp={false} className="mt-4" /> : null}
                 <p className="mt-3 text-[12px] text-muted">
-                  Ranks come from each engine's candidate list (max(limit×3, 15) deep), so a hybrid hit can rank deeper than the top {limit} shown in the BM25 and Vector columns.
+                  BM25 and vector ranks come from candidate lists max(limit×3, 15) deep, so a hybrid hit can rank deeper than the top {limit} shown in their columns. Graph ranks come from up to settings.graph_retrieval_limit (15) active claims.
                 </p>
               </CardContent>
             </Card>

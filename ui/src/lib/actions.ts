@@ -67,3 +67,19 @@ export async function syncNow() {
   toast.success('Freshness poll triggered', { description: 'Conditional GET against every feed' })
   return eventId
 }
+
+/** POST /evals/run: the multi-variant benchmark plus a replay of recent `failures` rows. */
+export async function runEvalSuite(suite_name = 'golden_v1', include_failures_table = true) {
+  const res = await api
+    .runEvals(suite_name, include_failures_table)
+    .catch(fail('Evaluation suite was not queued'))
+  trackJob({
+    event_id: res.event_id,
+    kind: 'eval',
+    label: `Eval suite · ${res.suite_name}`,
+    trace_url: res.trace_url,
+    created_at: Date.now(),
+  })
+  toast.success(`Eval suite queued · ${res.suite_name}`, { description: `event ${res.event_id}` })
+  return res
+}

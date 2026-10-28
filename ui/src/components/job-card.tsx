@@ -1,6 +1,7 @@
-import { ArrowUpRight, FileText, Rss, Workflow, X } from 'lucide-react'
+import { ArrowUpRight, FileText, Gauge, Rss, Workflow, X } from 'lucide-react'
 import { motion } from 'motion/react'
-import type { InngestRun } from '@/lib/api'
+import type { EvalSuiteRun, InngestRun } from '@/lib/api'
+import { bestVariant, pct, variantRows } from '@/lib/evals'
 import { forgetJob, isDone, type JobPhase, type TrackedJob, useJob, useJobRuns } from '@/lib/jobs'
 import { cn, timeAgo } from '@/lib/utils'
 import { StatusPill, type StatusKind } from './status'
@@ -12,6 +13,7 @@ const KIND = {
   backfill: { icon: Workflow, label: 'Backfill' },
   article: { icon: FileText, label: 'Article' },
   sync: { icon: Rss, label: 'Freshness poll' },
+  eval: { icon: Gauge, label: 'Evaluation' },
 } as const
 
 const PHASE: Record<JobPhase, { kind: StatusKind; label: string }> = {
@@ -50,8 +52,17 @@ function Ring({ value, total, active }: { value: number; total: number; active: 
 function summarise(run: InngestRun | undefined): string | null {
   const out = run?.output as Record<string, unknown> | null | undefined
   if (!out || typeof out !== 'object') return null
+  if ('variants_summary' in out) {
+    const best = bestVariant(variantRows(out as Pick<EvalSuiteRun, 'variants_summary'>))
+    return best ? `Best recall@5: ${best.label} at ${pct(best.summary.recall_at_5)} · MRR ${best.summary.mrr.toFixed(2)}` : 'Suite finished'
+  }
+  if ('composite_score' in out) return `Composite ${out.composite_score} · faithfulness ${out.faithfulness_verdict}`
   if ('discovered' in out) return `${out.discovered} new article${out.discovered === 1 ? '' : 's'} discovered`
   if (out.status === 'unchanged') return 'Unchanged: same content hash, no re-embedding'
+  if ('claim_count' in out) {
+    if (out.status === 'skipped_empty') return 'No article text: claim extraction skipped'
+    return `${out.claim_count} claims extracted${out.dropped_spans ? ` · ${out.dropped_spans} quotes failed the guardrail` : ''}`
+  }
   if ('passage_count' in out) return `${out.passage_count} passages written`
   if ('polled_count' in out && Array.isArray(out.results)) {
     const rs = out.results as { status: number; new_articles: number }[]

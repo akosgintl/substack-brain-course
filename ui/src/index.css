@@ -6,8 +6,9 @@
 
 /*
  * Tokens. Engine colours (vector / bm25 / both) are the first three slots of
- * the validated categorical palette, stepped per theme; they always ship next
- * to a text label, never as colour alone.
+ * the validated categorical palette, stepped per theme; graph (Memgraph claims,
+ * week 4) takes the next one. They always ship next to a text label, never as
+ * colour alone.
  */
 :root {
   color-scheme: light;
@@ -28,6 +29,7 @@
   --eng-vector: #2a78d6;
   --eng-bm25: #eb6834;
   --eng-both: #1baf7a;
+  --eng-graph: #c43d8f;
   --good: #0ca30c;
   --good-text: #006300;
   --warning: #fab219;
@@ -53,6 +55,7 @@
   --eng-vector: #3987e5;
   --eng-bm25: #d95926;
   --eng-both: #199e70;
+  --eng-graph: #dc5aa8;
   --good-text: #0ca30c;
 }
 
@@ -71,6 +74,7 @@
   --color-vector: var(--eng-vector);
   --color-bm25: var(--eng-bm25);
   --color-both: var(--eng-both);
+  --color-graph: var(--eng-graph);
   --color-good: var(--good);
   --color-good-text: var(--good-text);
   --color-warning: var(--warning);

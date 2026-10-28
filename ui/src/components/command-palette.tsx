@@ -3,9 +3,11 @@ import {
   ArrowUpRight,
   Download,
   FlaskConical,
+  Gauge,
   LayoutDashboard,
   MessageSquareText,
   Monitor,
+  ScanSearch,
   Rss,
   SquareTerminal,
   Workflow,
@@ -13,12 +15,13 @@ import {
 import { Dialog } from 'radix-ui'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { startBackfill, startBackfillAll, syncNow } from '@/lib/actions'
+import { runEvalSuite, startBackfill, startBackfillAll, syncNow } from '@/lib/actions'
 import { publications } from '@/lib/allowlist'
 import { links } from '@/lib/links'
 import { useStore } from '@/lib/store'
 import { cycleTheme } from '@/lib/theme'
-import { openConsole, uiStore } from '@/lib/ui-state'
+import { inspectSource, openConsole, uiStore } from '@/lib/ui-state'
+import { isUuid } from '@/lib/utils'
 import { Kbd } from './ui/misc'
 
 function Item({ icon, children, onSelect, hint, forceMount, value, keywords }: { icon: ReactNode; children: ReactNode; onSelect: () => void; hint?: string; forceMount?: boolean; value?: string; keywords?: string[] }) {
@@ -86,6 +89,11 @@ export function CommandPalette() {
               <Command.Empty className="px-4 py-8 text-center text-[13px] text-muted">No matching command.</Command.Empty>
               {q ? (
                 <Command.Group heading="Query" className={groupCls} forceMount>
+                  {isUuid(q) ? (
+                    <Item forceMount value="query-source" keywords={[q]} icon={<ScanSearch />} hint="GET /sources" onSelect={run(() => inspectSource(q))}>
+                      Inspect source {q.slice(0, 8)}…
+                    </Item>
+                  ) : null}
                   <Item forceMount value="query-ask" keywords={[q]} icon={<MessageSquareText />} hint="POST /ask" onSelect={run(() => navigate(`/ask?q=${encodeURIComponent(q)}`, { state: { autorun: true } }))}>
                     Ask “{q}”
                   </Item>
@@ -98,10 +106,12 @@ export function CommandPalette() {
                 <Item icon={<LayoutDashboard />} onSelect={run(() => navigate('/'))}>Overview</Item>
                 <Item icon={<MessageSquareText />} onSelect={run(() => navigate('/ask'))}>Ask</Item>
                 <Item icon={<FlaskConical />} onSelect={run(() => navigate('/lab'))}>Search Lab</Item>
+                <Item icon={<Gauge />} onSelect={run(() => navigate('/evals'))}>Evals</Item>
                 <Item icon={<Download />} onSelect={run(() => navigate('/ingest'))}>Ingest &amp; jobs</Item>
               </Command.Group>
               <Command.Group heading="Pipeline" className={groupCls}>
                 <Item icon={<Rss />} hint="kb/feed.poll" onSelect={run(() => syncNow().catch(ignore))}>Run freshness poll now</Item>
+                <Item icon={<Gauge />} hint="POST /evals/run" onSelect={run(() => runEvalSuite().catch(ignore))}>Run evaluation suite</Item>
                 <Item icon={<Workflow />} hint="POST /publications ×all" onSelect={run(() => startBackfillAll().catch(ignore))}>Backfill all publications</Item>
                 {publications.map((p) => (
                   <Item key={p.slug} icon={<Workflow />} hint={p.slug} onSelect={run(() => startBackfill(p).catch(ignore))}>
@@ -115,6 +125,7 @@ export function CommandPalette() {
                 <Item icon={<ArrowUpRight />} hint=":8288" onSelect={run(() => window.open(links.inngest, '_blank'))}>Open Inngest dev server</Item>
                 <Item icon={<ArrowUpRight />} hint="/docs" onSelect={run(() => window.open(links.swagger, '_blank'))}>Open Swagger UI</Item>
                 <Item icon={<ArrowUpRight />} hint=":8081" onSelect={run(() => window.open(links.adminer, '_blank'))}>Open Adminer</Item>
+                <Item icon={<ArrowUpRight />} hint=":3000" onSelect={run(() => window.open(links.memgraphLab, '_blank'))}>Open Memgraph Lab</Item>
               </Command.Group>
             </Command.List>
           </Command>

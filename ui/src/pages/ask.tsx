@@ -16,14 +16,17 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Answer, type SourceLookup } from '@/components/answer'
 import { EngineBadge } from '@/components/engine'
+import { EvalVerdicts } from '@/components/eval-verdicts'
 import { PageHeader } from '@/components/page-header'
-import { RankChip } from '@/components/passage'
+import { ClaimNote, ClaimTypeBadge } from '@/components/claim'
+import { EngineRanks, InspectButton } from '@/components/passage'
 import { StatusPill } from '@/components/status'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/input'
 import { CopyButton, EmptyState, Kbd, Skeleton } from '@/components/ui/misc'
 import { Sheet } from '@/components/ui/overlays'
+import { useSnapshotEval } from '@/hooks/queries'
 import { type AskResponse, type Hit, api, classifyAnswer, toHits } from '@/lib/api'
 import { type AskEntry, deleteAsk, historyStore, saveAsk } from '@/lib/history'
 import { useStore } from '@/lib/store'
@@ -34,6 +37,7 @@ const SUGGESTIONS = [
   'What makes a workflow step durable, and why does idempotency matter?',
   'How should I evaluate a RAG pipeline in production?',
   'How do LLM agents implement long-term memory?',
+  'Do authors disagree about agentic RAG?',
 ]
 const LIMITS = [3, 5, 8, 10]
 
@@ -110,7 +114,7 @@ function SourceList({
   focused: number | null
   pending: boolean
 }) {
-  const cited = new Set(response?.citations.map((c) => c.passage_id))
+  const citations = new Map(response?.citations.map((c) => [c.passage_id, c]))
   if (pending && !passages) {
     return (
       <div className="space-y-3">
@@ -129,7 +133,10 @@ function SourceList({
     <ol className="space-y-2.5">
       {items.map((p, i) => {
         const n = i + 1
-        const isCited = cited.has(p.passage_id)
+        const citation = citations.get(p.passage_id)
+        const isCited = !!citation
+        const claimId = p.claim_id || citation?.claim_id
+        const claimType = p.claim_type || citation?.claim_type
         return (
           <motion.li
             id={`source-${n}`}
@@ -162,21 +169,55 @@ function SourceList({
                 </p>
               </div>
             </div>
+            {p.claim_text ? (
+              <ClaimNote text={p.claim_text} type={claimType} className="mt-2" />
+            ) : claimType ? (
+              <ClaimTypeBadge type={claimType} className="mt-2" />
+            ) : null}
             {p.text ? <p className="mt-2 line-clamp-3 text-[12px] leading-relaxed text-fg-2">{p.text}</p> : null}
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
               {p.engine ? <EngineBadge engine={p.engine} /> : null}
-              {p.sparse_rank != null ? <RankChip label="BM25" rank={p.sparse_rank} /> : null}
-              {p.dense_rank != null ? <RankChip label="Vector" rank={p.dense_rank} /> : null}
-              {response ? (
-                <span className={cn('ml-auto text-[11px] font-medium', isCited ? 'text-good-text' : 'text-muted')}>
-                  {isCited ? 'Cited' : 'Not cited'}
-                </span>
-              ) : null}
+              <EngineRanks hit={p} />
+              <div className="ml-auto flex items-center gap-3">
+                <InspectButton id={claimId || p.passage_id} label={claimId ? 'Claim' : 'Source'} />
+                {response ? (
+                  <span className={cn('text-[11px] font-medium', isCited ? 'text-good-text' : 'text-muted')}>
+                    {isCited ? 'Cited' : 'Not cited'}
+                  </span>
+                ) : null}
+              </div>
             </div>
           </motion.li>
         )
       })}
     </ol>
+  )
+}
+
+/** evaluate-answer's verdict on this snapshot (week 5), once it lands in GET /evals/latest. */
+function AnswerEval({ snapshotId, askedAt }: { snapshotId: string; askedAt: number }) {
+  const q = useSnapshotEval(snapshotId, askedAt)
+  if (q.isError || q.isPending) return null
+  const e = q.data
+  // Polling stops a few minutes after the question; the last empty fetch means it never showed up.
+  const gaveUp = !e && q.dataUpdatedAt - askedAt > 3 * 60_000
+  return (
+    <div className="mt-3 rounded-xl border border-line bg-surface-2/40 px-3.5 py-3 text-[12px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-fg-2">Evaluation</span>
+        {e ? (
+          <EvalVerdicts e={e} />
+        ) : gaveUp ? (
+          <span className="text-muted">Not in the 50 most recent evaluations. Check the evaluate-answer run in Inngest.</span>
+        ) : (
+          <StatusPill kind="running" label="evaluate-answer scoring this snapshot…" />
+        )}
+        <Link to="/evals" className="ml-auto text-[11.5px] font-medium text-accent hover:underline">
+          All evals
+        </Link>
+      </div>
+      {e?.faithfulness_critique ? <p className="mt-2 leading-relaxed text-fg-2">{e.faithfulness_critique}</p> : null}
+    </div>
   )
 }
 
@@ -234,9 +275,9 @@ export function AskPage() {
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   })
-  // Same hybrid retrieval POST /ask runs internally (same query, same limit,
-  // deterministic tie-break), so it returns the passages behind [1], [2], ...
-  // with their text and ranks, which the /ask response doesn't include.
+  // Same 3-way hybrid retrieval POST /ask runs internally (same query, same
+  // limit, deterministic tie-break), so it returns the passages behind [1], [2],
+  // ... with their text, ranks and matched claims, which /ask doesn't include.
   const sourcesQ = useQuery({
     queryKey: ['ask-sources', run?.key],
     queryFn: async () => toHits('hybrid', (await api.search(run!.question, 'hybrid', run!.limit)).results),
@@ -320,7 +361,7 @@ export function AskPage() {
       <PageHeader
         eyebrow="POST /ask"
         title="Ask the brain"
-        description="Hybrid retrieval picks the passages, Claude writes an answer citing them inline. Hover a citation to read its source."
+        description="3-way retrieval (BM25, vectors and the Memgraph claim graph) picks the passages, Claude writes an answer citing them inline. Hover a citation to read its source, or open its provenance."
         actions={
           <Button variant="ghost" onClick={() => setHistoryOpen(true)}>
             <History /> History <span className="tabular text-muted">{history.length}</span>
@@ -423,7 +464,7 @@ export function AskPage() {
                       <Stage
                         done={!view.sourcesPending}
                         active={view.sourcesPending}
-                        label="Hybrid retrieval"
+                        label="3-way retrieval"
                         detail={view.passages ? `${view.passages.length} passages` : undefined}
                       />
                       <Stage done={false} active={!view.sourcesPending} label="Claude writing answer" />
@@ -463,6 +504,12 @@ export function AskPage() {
                       <span className="rounded-full border border-line px-2 py-0.5">
                         {r.citations.length} of {view.passages?.length ?? view.limit} passages cited
                       </span>
+                      {r.citations.some((c) => c.claim_id) ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-graph/30 bg-graph/5 px-2 py-0.5">
+                          <span aria-hidden className="size-1.5 rounded-full bg-graph" />
+                          {r.citations.filter((c) => c.claim_id).length} backed by graph claims
+                        </span>
+                      ) : null}
                       <span className="inline-flex items-center gap-1 rounded-full border border-line py-0.5 pl-2 pr-0.5 font-mono text-[11px]">
                         snapshot {r.snapshot_id.slice(0, 12)}…
                         <CopyButton value={r.snapshot_id} label="Copy snapshot id" />
@@ -479,6 +526,7 @@ export function AskPage() {
                         </Link>
                       </div>
                     </div>
+                    <AnswerEval snapshotId={r.snapshot_id} askedAt={view.at} />
                   </>
                 ) : null}
               </CardContent>
@@ -488,7 +536,7 @@ export function AskPage() {
               <div className="sticky top-6">
                 <div className="mb-3 flex items-baseline justify-between px-1">
                   <h2 className="text-[13px] font-semibold">Sources</h2>
-                  <span className="text-[11.5px] text-muted">hybrid top {view.limit}</span>
+                  <span className="text-[11.5px] text-muted">3-way RRF top {view.limit}</span>
                 </div>
                 <div className="max-h-[calc(100vh-140px)] overflow-y-auto pb-4 pr-1">
                   <SourceList passages={view.passages} response={r} focused={focused} pending={view.sourcesPending} />

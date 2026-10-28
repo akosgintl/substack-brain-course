@@ -14,6 +14,7 @@ export default defineConfig(({ mode }) => {
   const apiUrl = env.KB_API_URL || 'http://localhost:8000'
   const inngestUrl = env.INNGEST_URL || 'http://localhost:8288'
   const adminerUrl = env.ADMINER_URL || 'http://localhost:8081'
+  const memgraphLabUrl = env.MEMGRAPH_LAB_URL || 'http://localhost:3000'
 
   const proxy: Record<string, ProxyOptions> = {
     '/api': { target: apiUrl, changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, '') },
@@ -38,6 +39,7 @@ export default defineConfig(({ mode }) => {
       __KB_API_URL__: JSON.stringify(apiUrl),
       __INNGEST_URL__: JSON.stringify(inngestUrl),
       __ADMINER_URL__: JSON.stringify(adminerUrl),
+      __MEMGRAPH_LAB_URL__: JSON.stringify(memgraphLabUrl),
     },
     server: { port: 5173, proxy, fs: { allow: [here('..')] } },
     preview: { port: 4173, proxy },

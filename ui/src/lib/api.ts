@@ -1,7 +1,7 @@
 import { createStore } from './store'
 
 /* ------------------------------------------------------------------ types -- */
-/* Shapes as returned by kb/main.py today. Nothing here is invented: where the
+/* Shapes as returned by kb/main.py (through week 5). Nothing here is invented: where the
  * UI needs more (passage text for citations, engine-agnostic hits) it derives
  * it client-side from the existing endpoints. */
 
@@ -9,12 +9,26 @@ export interface Health {
   status: 'ok' | 'degraded'
   database: string
   inngest: string
+  /** Week 4. Optional so an older backend still renders. */
+  memgraph?: string
   articles: number
   passages: number
+  /** Active claims (max of Postgres and Memgraph) and canonical topics in the graph. */
+  claims?: number
+  topics?: number
 }
 
 export type Mode = 'hybrid' | 'sparse' | 'dense'
-export type Engine = 'bm25' | 'vector' | 'both'
+/** `source` on a hybrid candidate: which of the three engines found it (kb/retrieval/hybrid.py). */
+export type Engine = 'bm25' | 'vector' | 'both' | 'graph' | 'bm25+graph' | 'vector+graph' | 'all'
+export type ClaimType = 'opinion' | 'measurement' | 'prediction'
+
+/** Set when the Memgraph claim graph matched the passage (week 4). */
+interface ClaimFields {
+  claim_id?: string | null
+  claim_text?: string | null
+  claim_type?: ClaimType | string | null
+}
 
 interface PassageBase {
   passage_id: string
@@ -30,13 +44,15 @@ export interface EngineResult extends PassageBase {
   rank: number
 }
 
-/** `GET /search?mode=hybrid` and the candidates inside POST /ask. */
-export interface HybridResult extends PassageBase {
+/** `GET /search?mode=hybrid` and the candidates inside POST /ask: 3-way RRF since week 4. */
+export interface HybridResult extends PassageBase, ClaimFields {
   rrf_score: number
   sparse_rank: number | null
   sparse_score: number | null
   dense_rank: number | null
   dense_score: number | null
+  /** Absent on a pre-week-4 backend. */
+  graph_rank?: number | null
   source: Engine
 }
 
@@ -46,12 +62,13 @@ export interface SearchResponse {
 }
 
 /** One search hit, normalised so every mode renders the same way. */
-export interface Hit extends PassageBase {
+export interface Hit extends PassageBase, ClaimFields {
   position: number
   score: number
   engine: Engine
   sparse_rank: number | null
   dense_rank: number | null
+  graph_rank: number | null
   sparse_score: number | null
   dense_score: number | null
   rrf_score: number | null
@@ -63,6 +80,9 @@ export interface Citation {
   title: string
   author: string | null
   url: string
+  /** Present when the cited passage came with a graph claim. */
+  claim_id?: string
+  claim_type?: string | null
 }
 
 export interface AskResponse {
@@ -71,6 +91,36 @@ export interface AskResponse {
   as_of: string
   snapshot_id: string
   latency_ms: number
+}
+
+/** `GET /sources/{claim_or_passage_id}`: provenance for a citation (kb/db/queries.py). */
+export interface SourceProvenance {
+  kind: 'claim' | 'passage'
+  id: string
+  chunk_index?: number
+  article: {
+    article_id: string
+    canonical_id: string
+    title: string
+    url: string
+    published_at: string
+    content_hash: string
+  }
+  publication: { slug: string; name: string; homepage: string }
+  author: string
+  /** The claim's quote_span, or the whole passage text. */
+  verbatim_quote: string
+  claim_text?: string
+  claim_type?: string
+  confidence?: number
+  /** Canonical topics from the ontology (kb/graph/ontology.py). */
+  topics?: { slug: string; name: string }[]
+  validity: {
+    valid_from: string
+    valid_to: string | null
+    is_active: boolean
+    supersedes_id: string | null
+  }
 }
 
 export interface Queued {
@@ -105,6 +155,63 @@ export interface InngestRun {
   run_started_at?: string
   ended_at?: string | null
   output?: unknown
+}
+
+/* ---------------------------------------------------------------- evals -- */
+
+export type Verdict = 'PASS' | 'FAIL'
+/** The disagreement judge only runs when the retrieved context spans 2+ authors/publications. */
+export type DisagreementVerdict = Verdict | 'NOT_APPLICABLE'
+
+/** One row of `eval_results`, as `GET /evals/latest` returns it (no `checks`, no disagreement critique). */
+export interface SnapshotEval {
+  snapshot_id: string
+  /** 1.0 all pass · 0.5 disagreement FAIL only · 0.0 deterministic or faithfulness FAIL. */
+  composite_score: number
+  deterministic_passed: boolean
+  faithfulness_verdict: Verdict | string
+  faithfulness_critique: string
+  disagreement_verdict: DisagreementVerdict | string
+  /** `FM-1`..`FM-6` from evals/taxonomy.yaml. */
+  failure_codes: string[]
+  created_at: string
+}
+
+/** Per-variant aggregate over evals/golden_benchmark.yaml (fixture corpus, not the live DB). */
+export interface VariantSummary {
+  recall_at_5: number
+  mrr: number
+  cross_pub_coverage: number
+  /** Constants in kb/functions/evals.py, not measured per run. */
+  deterministic_pass_rate: number
+  faithfulness_pass_rate: number
+}
+
+export interface FailuresReplay {
+  failures_replayed: number
+  functions_affected: string[]
+}
+
+export interface EvalSuiteRun {
+  run_id: string
+  suite_name: string
+  /** Keyed by variant (`sparse_bm25`, …) plus `failures_replay`. */
+  variants_summary: Record<string, VariantSummary | FailuresReplay>
+  created_at: string
+}
+
+/** `GET /evals/latest`. Pass rates cover only the `limit` most recent evaluations; null when there are none. */
+export interface EvalReport {
+  total_evaluated_snapshots: number
+  recent_deterministic_pass_rate: number | null
+  recent_faithfulness_pass_rate: number | null
+  failure_taxonomy_counts: Record<string, number>
+  recent_evaluations: SnapshotEval[]
+  latest_suite_run: EvalSuiteRun | null
+}
+
+export interface EvalRunQueued extends Queued {
+  suite_name: string
 }
 
 /* ------------------------------------------------------------- activity -- */
@@ -225,11 +332,21 @@ export const api = {
   ask: (question: string, limit?: number) =>
     request<AskResponse>('api', 'POST', '/ask', limit ? { question, limit } : { question }),
 
+  source: (id: string) =>
+    request<SourceProvenance>('api', 'GET', `/sources/${encodeURIComponent(id.trim())}`),
+
   addPublication: (feed_url: string, name?: string) =>
     request<Queued>('api', 'POST', '/publications', { feed_url, name }),
 
   addArticle: (url: string, title?: string) =>
     request<Queued>('api', 'POST', '/articles', { url, title: title || undefined }),
+
+  /** `kb/eval.run` -> run-eval-suite. There is no jobs row, so `GET /jobs` falls back to the Inngest run. */
+  runEvals: (suite_name?: string, include_failures_table?: boolean) =>
+    request<EvalRunQueued>('api', 'POST', '/evals/run', { suite_name, include_failures_table }),
+
+  evalReport: (limit = 10, background = true) =>
+    request<EvalReport>('api', 'GET', `/evals/latest?limit=${limit}`, undefined, { background }),
 
   job: (eventId: string) =>
     request<JobStatus>('api', 'GET', `/jobs/${encodeURIComponent(eventId)}`, undefined, {
@@ -267,7 +384,7 @@ export function toHits(mode: Mode, results: SearchResponse['results']): Hit[] {
   return results.map((r, i) => {
     const position = i + 1
     if (isHybrid(r)) {
-      return { ...r, position, score: r.rrf_score, engine: r.source }
+      return { ...r, position, score: r.rrf_score, engine: r.source, graph_rank: r.graph_rank ?? null }
     }
     const sparse = mode === 'sparse'
     return {
@@ -279,6 +396,7 @@ export function toHits(mode: Mode, results: SearchResponse['results']): Hit[] {
       sparse_score: sparse ? r.rank : null,
       dense_rank: sparse ? null : position,
       dense_score: sparse ? null : r.rank,
+      graph_rank: null,
       rrf_score: null,
     }
   })
@@ -287,15 +405,27 @@ export function toHits(mode: Mode, results: SearchResponse['results']): Hit[] {
 /**
  * RRF k isn't exposed by the API, but a passage found by one engine only has
  * rrf = 1 / (k + rank), so k falls out exactly. Returns null if every hit was
- * found by both engines.
+ * found by more than one engine.
  */
 export function inferRrfK(hits: Hit[]): number | null {
   for (const h of hits) {
     if (!h.rrf_score) continue
-    const rank = h.engine === 'bm25' ? h.sparse_rank : h.engine === 'vector' ? h.dense_rank : null
+    const rank =
+      h.engine === 'bm25' ? h.sparse_rank : h.engine === 'vector' ? h.dense_rank : h.engine === 'graph' ? h.graph_rank : null
     if (rank != null) return Math.round(1 / h.rrf_score - rank)
   }
   return null
+}
+
+/** The `1/(k+rank)` terms behind a hybrid hit's RRF score, one per engine that found it. */
+export function rrfTerms(h: Pick<Hit, 'sparse_rank' | 'dense_rank' | 'graph_rank'>, k: number) {
+  return (
+    [
+      ['bm25', h.sparse_rank],
+      ['vector', h.dense_rank],
+      ['graph', h.graph_rank],
+    ] as const
+  ).map(([engine, rank]) => ({ engine, rank, value: rank != null ? 1 / (k + rank) : null }))
 }
 
 /** The backend's fallbacks that come back as HTTP 200 with a message in `answer`. */

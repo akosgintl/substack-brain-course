@@ -5,4 +5,5 @@ export const links = {
   inngest: __INNGEST_URL__,
   inngestRuns: `${__INNGEST_URL__}/runs`,
   adminer: __ADMINER_URL__,
+  memgraphLab: __MEMGRAPH_LAB_URL__,
 }

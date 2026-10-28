@@ -89,7 +89,7 @@ export function OverviewPage() {
       <PageHeader
         eyebrow="Overview"
         title={<span className="text-gradient">Your newsletters, searchable.</span>}
-        description="A durable knowledge base built from technical Substacks: hybrid BM25 + vector retrieval in Postgres, answers with citations, and Inngest pipelines that keep it fresh."
+        description="A durable knowledge base built from technical Substacks: 3-way retrieval over BM25, pgvector and a Memgraph claim graph, answers with citations, and Inngest pipelines that keep it fresh."
         actions={
           <>
             <Button onClick={act('sync', syncNow)} loading={busy === 'sync'}>
@@ -109,14 +109,23 @@ export function OverviewPage() {
           <Stat label="Articles" value={h ? formatNumber(h.articles) : '—'} loading={health.isPending} sub={`${publications.length} allowlisted publications`} />
         </motion.div>
         <motion.div {...fade(2)}>
-          <Stat label="Passages" value={h ? formatNumber(h.passages) : '—'} loading={health.isPending} sub="current revisions only" />
+          <Stat
+            label="Passages"
+            value={h ? formatNumber(h.passages) : '—'}
+            loading={health.isPending}
+            sub={h && h.articles ? `${(h.passages / h.articles).toFixed(1)} per article · current revisions` : 'current revisions only'}
+          />
         </motion.div>
         <motion.div {...fade(3)}>
           <Stat
-            label="Passages per article"
-            value={h && h.articles ? (h.passages / h.articles).toFixed(1) : '—'}
+            label="Claims"
+            value={h?.claims != null ? formatNumber(h.claims) : '—'}
             loading={health.isPending}
-            sub="1,000-char chunks, 150 overlap"
+            sub={
+              h?.claims == null
+                ? 'no claim counts from this API'
+                : `${h.topics != null ? `${formatNumber(h.topics)} topics in the graph` : 'active claims'}${h.articles ? ` · ${(h.claims / h.articles).toFixed(1)} per article` : ''}`
+            }
           />
         </motion.div>
         <motion.div {...fade(4)}>
@@ -137,6 +146,7 @@ export function OverviewPage() {
                 <span className="flex gap-3">
                   <span>Postgres {subsystemKind(h?.database) === 'ok' ? 'ok' : 'down'}</span>
                   <span>Inngest {subsystemKind(h?.inngest) === 'ok' ? 'ok' : 'down'}</span>
+                  {h?.memgraph !== undefined ? <span>Memgraph {subsystemKind(h.memgraph) === 'ok' ? 'ok' : 'down'}</span> : null}
                 </span>
               )
             }
